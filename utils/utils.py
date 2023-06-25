@@ -95,8 +95,8 @@ def get_model(args, device, t_to_sigma, no_parallel=False, confidence_mode=False
         embedding_scale=args.embedding_scale)
 
     lm_embedding_type = None
-    if args.esm_embeddings_path is not None: lm_embedding_type = 'esm'
-
+    if args.esm_embeddings_path is not None:
+        lm_embedding_type = 'esm'
     model = model_class(t_to_sigma=t_to_sigma,
                         device=device,
                         no_torsion=args.no_torsion,
@@ -119,9 +119,9 @@ def get_model(args, device, t_to_sigma, no_parallel=False, confidence_mode=False
                             args.rmsd_classification_cutoff) + 1 if 'rmsd_classification_cutoff' in args and isinstance(
                             args.rmsd_classification_cutoff, list) else 1)
 
-    if device.type == 'cuda' and not no_parallel:
-        model = DataParallel(model)
-    model.to(device)
+    # if device.type == 'cuda' and not no_parallel:
+    #     model = DataParallel(model)
+    model = model.to(device)
     return model
 
 
@@ -142,7 +142,8 @@ def get_symmetry_rmsd(mol, coords1, coords2, mol2=None):
         return RMSD
 
 
-class TimeoutException(Exception): pass
+class TimeoutException(Exception):
+    pass
 
 
 @contextmanager

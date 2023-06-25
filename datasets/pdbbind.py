@@ -34,7 +34,8 @@ class NoiseTransform(BaseTransform):
         t_tr, t_rot, t_tor = t, t, t
         return self.apply_noise(data, t_tr, t_rot, t_tor)
 
-    def apply_noise(self, data, t_tr, t_rot, t_tor, tr_update = None, rot_update=None, torsion_updates=None):
+    def apply_noise(self, data, t_tr, t_rot, t_tor, tr_update=None, rot_update=None, torsion_updates=None):
+        breakpoint()
         if not torch.is_tensor(data['ligand'].pos):
             data['ligand'].pos = random.choice(data['ligand'].pos)
 
@@ -114,6 +115,7 @@ class PDBBind(Dataset):
         return len(self.complex_graphs)
 
     def get(self, idx):
+        # get item method for dataset which allows return batched data as loader output
         if self.require_ligand:
             complex_graph = copy.deepcopy(self.complex_graphs[idx])
             complex_graph.mol = copy.deepcopy(self.rdkit_ligands[idx])
@@ -144,11 +146,11 @@ class PDBBind(Dataset):
 
         if self.num_workers > 1:
             # running preprocessing in parallel on multiple workers and saving the progress every 1000 complexes
-            for i in range(len(complex_names_all)//1000+1):
+            for i in range(len(complex_names_all) // 1000 + 1):
                 if os.path.exists(os.path.join(self.full_cache_path, f"heterographs{i}.pkl")):
                     continue
-                complex_names = complex_names_all[1000*i:1000*(i+1)]
-                lm_embeddings_chains = lm_embeddings_chains_all[1000*i:1000*(i+1)]
+                complex_names = complex_names_all[1000 * i:1000 * (i + 1)]
+                lm_embeddings_chains = lm_embeddings_chains_all[1000 * i:1000 * (i + 1)]
                 complex_graphs, rdkit_ligands = [], []
                 if self.num_workers > 1:
                     p = Pool(self.num_workers, maxtasksperchild=1)
@@ -159,7 +161,8 @@ class PDBBind(Dataset):
                         complex_graphs.extend(t[0])
                         rdkit_ligands.extend(t[1])
                         pbar.update()
-                if self.num_workers > 1: p.__exit__(None, None, None)
+                if self.num_workers > 1:
+                    p.__exit__(None, None, None)
 
                 with open(os.path.join(self.full_cache_path, f"heterographs{i}.pkl"), 'wb') as f:
                     pickle.dump((complex_graphs), f)
@@ -167,7 +170,7 @@ class PDBBind(Dataset):
                     pickle.dump((rdkit_ligands), f)
 
             complex_graphs_all = []
-            for i in range(len(complex_names_all)//1000+1):
+            for i in range(len(complex_names_all) // 1000 + 1):
                 with open(os.path.join(self.full_cache_path, f"heterographs{i}.pkl"), 'rb') as f:
                     l = pickle.load(f)
                     complex_graphs_all.extend(l)
@@ -192,6 +195,7 @@ class PDBBind(Dataset):
                 pickle.dump((complex_graphs), f)
             with open(os.path.join(self.full_cache_path, "rdkit_ligands.pkl"), 'wb') as f:
                 pickle.dump((rdkit_ligands), f)
+            breakpoint()
 
     def inference_preprocessing(self):
         ligands_list = []
@@ -224,7 +228,8 @@ class PDBBind(Dataset):
         if self.esm_embeddings_path is not None:
             print('Reading language model embeddings.')
             lm_embeddings_chains_all = []
-            if not os.path.exists(self.esm_embeddings_path): raise Exception('ESM embeddings path does not exist: ',self.esm_embeddings_path)
+            if not os.path.exists(self.esm_embeddings_path):
+                raise Exception('ESM embeddings path does not exist: ', self.esm_embeddings_path)
             for protein_path in self.protein_path_list:
                 embeddings_paths = sorted(glob.glob(os.path.join(self.esm_embeddings_path, os.path.basename(protein_path)) + '*'))
                 lm_embeddings_chains = []
@@ -237,24 +242,25 @@ class PDBBind(Dataset):
         print('Generating graphs for ligands and proteins')
         if self.num_workers > 1:
             # running preprocessing in parallel on multiple workers and saving the progress every 1000 complexes
-            for i in range(len(self.protein_path_list)//1000+1):
+            for i in range(len(self.protein_path_list) // 1000 + 1):
                 if os.path.exists(os.path.join(self.full_cache_path, f"heterographs{i}.pkl")):
                     continue
-                protein_paths_chunk = self.protein_path_list[1000*i:1000*(i+1)]
-                ligand_description_chunk = self.ligand_descriptions[1000*i:1000*(i+1)]
+                protein_paths_chunk = self.protein_path_list[1000 * i:1000 * (i + 1)]
+                ligand_description_chunk = self.ligand_descriptions[1000 * i:1000 * (i + 1)]
                 ligands_chunk = ligands_list[1000 * i:1000 * (i + 1)]
-                lm_embeddings_chains = lm_embeddings_chains_all[1000*i:1000*(i+1)]
+                lm_embeddings_chains = lm_embeddings_chains_all[1000 * i:1000 * (i + 1)]
                 complex_graphs, rdkit_ligands = [], []
                 if self.num_workers > 1:
                     p = Pool(self.num_workers, maxtasksperchild=1)
                     p.__enter__()
                 with tqdm(total=len(protein_paths_chunk), desc=f'loading complexes {i}/{len(protein_paths_chunk)//1000+1}') as pbar:
                     map_fn = p.imap_unordered if self.num_workers > 1 else map
-                    for t in map_fn(self.get_complex, zip(protein_paths_chunk, lm_embeddings_chains, ligands_chunk,ligand_description_chunk)):
+                    for t in map_fn(self.get_complex, zip(protein_paths_chunk, lm_embeddings_chains, ligands_chunk, ligand_description_chunk)):
                         complex_graphs.extend(t[0])
                         rdkit_ligands.extend(t[1])
                         pbar.update()
-                if self.num_workers > 1: p.__exit__(None, None, None)
+                if self.num_workers > 1:
+                    p.__exit__(None, None, None)
 
                 with open(os.path.join(self.full_cache_path, f"heterographs{i}.pkl"), 'wb') as f:
                     pickle.dump((complex_graphs), f)
@@ -262,7 +268,7 @@ class PDBBind(Dataset):
                     pickle.dump((rdkit_ligands), f)
 
             complex_graphs_all = []
-            for i in range(len(self.protein_path_list)//1000+1):
+            for i in range(len(self.protein_path_list) // 1000 + 1):
                 with open(os.path.join(self.full_cache_path, f"heterographs{i}.pkl"), 'rb') as f:
                     l = pickle.load(f)
                     complex_graphs_all.extend(l)
@@ -283,7 +289,8 @@ class PDBBind(Dataset):
                     complex_graphs.extend(t[0])
                     rdkit_ligands.extend(t[1])
                     pbar.update()
-            if complex_graphs == []: raise Exception('Preprocessing did not succeed for any complex')
+            if complex_graphs == []:
+                raise Exception('Preprocessing did not succeed for any complex')
             with open(os.path.join(self.full_cache_path, "heterographs.pkl"), 'wb') as f:
                 pickle.dump((complex_graphs), f)
             with open(os.path.join(self.full_cache_path, "rdkit_ligands.pkl"), 'wb') as f:
@@ -301,12 +308,15 @@ class PDBBind(Dataset):
             ligs = [ligand]
         else:
             try:
+                # get receptor from data/PDBBind_processed
                 rec_model = parse_receptor(name, self.pdbbind_dir)
             except Exception as e:
                 print(f'Skipping {name} because of the error:')
                 print(e)
                 return [], []
 
+            # read ligand mol object using RDKit for the receptor
+            # there could be multiple ligands per receptor
             ligs = read_mols(self.pdbbind_dir, name, remove_hs=False)
         complex_graphs = []
         failed_indices = []
@@ -314,12 +324,14 @@ class PDBBind(Dataset):
             if self.max_lig_size is not None and lig.GetNumHeavyAtoms() > self.max_lig_size:
                 print(f'Ligand with {lig.GetNumHeavyAtoms()} heavy atoms is larger than max_lig_size {self.max_lig_size}. Not including {name} in preprocessed data.')
                 continue
+            # store both ligand and target using a heterogenous graph object
             complex_graph = HeteroData()
             complex_graph['name'] = name
             try:
                 get_lig_graph_with_matching(lig, complex_graph, self.popsize, self.maxiter, self.matching, self.keep_original,
                                             self.num_conformers, remove_hs=self.remove_hs)
                 rec, rec_coords, c_alpha_coords, n_coords, c_coords, lm_embeddings = extract_receptor_structure(copy.deepcopy(rec_model), lig, lm_embedding_chains=lm_embedding_chains)
+                # there is LM embedding per residual
                 if lm_embeddings is not None and len(c_alpha_coords) != len(lm_embeddings):
                     print(f'LM embeddings for complex {name} did not have the right length for the protein. Skipping {name}.')
                     failed_indices.append(i)
@@ -335,6 +347,7 @@ class PDBBind(Dataset):
                 failed_indices.append(i)
                 continue
 
+            # centre both lig and protein coords
             protein_center = torch.mean(complex_graph['receptor'].pos, dim=0, keepdim=True)
             complex_graph['receptor'].pos -= protein_center
             if self.all_atoms:
@@ -396,9 +409,11 @@ def construct_loader(args, t_to_sigma):
     val_dataset = PDBBind(cache_path=args.cache_path, split_path=args.split_val, keep_original=True, **common_args)
 
     loader_class = DataListLoader if torch.cuda.is_available() else DataLoader
-    train_loader = loader_class(dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory)
-    val_loader = loader_class(dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory)
+    train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory)
+    val_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory)
 
+    # loader returns a single gragh object with mol integrated inside
+    # as complex_graph.mol
     return train_loader, val_loader
 
 

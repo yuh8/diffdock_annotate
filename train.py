@@ -1,6 +1,7 @@
 import copy
 import math
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 from functools import partial
 
 import wandb
@@ -30,7 +31,8 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
 
     print("Starting training...")
     for epoch in range(args.n_epochs):
-        if epoch % 5 == 0: print("Run name: ", args.run_name)
+        if epoch % 5 == 0:
+            print("Run name: ", args.run_name)
         logs = {}
         train_losses = train_epoch(model, train_loader, optimizer, device, t_to_sigma, loss_fn, ema_weights)
         print("Epoch {}: Training loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}"
@@ -38,7 +40,8 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                       train_losses['tor_loss']))
 
         ema_weights.store(model.parameters())
-        if args.use_ema: ema_weights.copy_to(model.parameters()) # load ema parameters into model for running validation and inference
+        if args.use_ema:
+            ema_weights.copy_to(model.parameters())  # load ema parameters into model for running validation and inference
         val_losses = test_epoch(model, val_loader, device, t_to_sigma, loss_fn, args.test_sigma_intervals)
         print("Epoch {}: Validation loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}"
               .format(epoch, val_losses['loss'], val_losses['tr_loss'], val_losses['rot_loss'], val_losses['tor_loss']))
@@ -49,7 +52,8 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                   .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5']))
             logs.update({'valinf_' + k: v for k, v in inf_metrics.items()}, step=epoch + 1)
 
-        if not args.use_ema: ema_weights.copy_to(model.parameters())
+        if not args.use_ema:
+            ema_weights.copy_to(model.parameters())
         ema_state_dict = copy.deepcopy(model.module.state_dict() if device.type == 'cuda' else model.state_dict())
         ema_weights.restore(model.parameters())
 
@@ -104,22 +108,24 @@ def main_function():
         args.config = args.config.name
     assert (args.inference_earlystop_goal == 'max' or args.inference_earlystop_goal == 'min')
     if args.val_inference_freq is not None and args.scheduler is not None:
-        assert (args.scheduler_patience > args.val_inference_freq) # otherwise we will just stop training after args.scheduler_patience epochs
+        assert (args.scheduler_patience > args.val_inference_freq)  # otherwise we will just stop training after args.scheduler_patience epochs
     if args.cudnn_benchmark:
         torch.backends.cudnn.benchmark = True
 
     # construct loader
+    # t_sigma_compl computes the variance schedule according to sigma_min^(1-t) * sigma_max^(t)
     t_to_sigma = partial(t_to_sigma_compl, args=args)
     train_loader, val_loader = construct_loader(args, t_to_sigma)
 
     model = get_model(args, device, t_to_sigma=t_to_sigma)
     optimizer, scheduler = get_optimizer_and_scheduler(args, model, scheduler_mode=args.inference_earlystop_goal if args.val_inference_freq is not None else 'min')
-    ema_weights = ExponentialMovingAverage(model.parameters(),decay=args.ema_rate)
+    ema_weights = ExponentialMovingAverage(model.parameters(), decay=args.ema_rate)
 
     if args.restart_dir:
         try:
             dict = torch.load(f'{args.restart_dir}/last_model.pt', map_location=torch.device('cpu'))
-            if args.restart_lr is not None: dict['optimizer']['param_groups'][0]['lr'] = args.restart_lr
+            if args.restart_lr is not None:
+                dict['optimizer']['param_groups'][0]['lr'] = args.restart_lr
             optimizer.load_state_dict(dict['optimizer'])
             model.module.load_state_dict(dict['model'], strict=True)
             if hasattr(args, 'ema_rate'):
@@ -154,5 +160,5 @@ def main_function():
 
 
 if __name__ == '__main__':
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
     main_function()

@@ -131,7 +131,6 @@ def safe_index(l, e):
         return len(l) - 1
 
 
-
 def parse_receptor(pdbid, pdbbind_dir):
     rec = parsePDB(pdbid, pdbbind_dir)
     return rec
@@ -140,6 +139,7 @@ def parse_receptor(pdbid, pdbbind_dir):
 def parsePDB(pdbid, pdbbind_dir):
     rec_path = os.path.join(pdbbind_dir, pdbid, f'{pdbid}_protein_processed.pdb')
     return parse_pdb_from_path(rec_path)
+
 
 def parse_pdb_from_path(path):
     with warnings.catch_warnings():
@@ -150,6 +150,16 @@ def parse_pdb_from_path(path):
 
 
 def extract_receptor_structure(rec, lig, lm_embedding_chains=None):
+    '''
+        Input: 1. receptor object contains all polypetide chain
+               2. RDKit lig mol object
+               3. residual LM embedding per chain
+        Output: All chains are concated
+                1. receptor object with invalid chains removed
+                2. coords list of arrays with each array containing
+                    complete coords of a residual
+                3. c_alpha_coords, n_coords, c_coords, lm_embeddings of each residual
+    '''
     conf = lig.GetConformer()
     lig_coords = conf.GetPositions()
     min_distances = []
@@ -159,6 +169,7 @@ def extract_receptor_structure(rec, lig, lm_embedding_chains=None):
     c_coords = []
     valid_chain_ids = []
     lengths = []
+    # iterate through all chains of a protein
     for i, chain in enumerate(rec):
         chain_coords = []  # num_residues, num_atoms, 3
         chain_c_alpha_coords = []
@@ -166,13 +177,16 @@ def extract_receptor_structure(rec, lig, lm_embedding_chains=None):
         chain_c_coords = []
         count = 0
         invalid_res_ids = []
+        # iterate through all residues in a chain
         for res_idx, residue in enumerate(chain):
             if residue.get_resname() == 'HOH':
                 invalid_res_ids.append(residue.get_id())
                 continue
             residue_coords = []
             c_alpha, n, c = None, None, None
+            # finding all atom coords of a residue
             for atom in residue:
+                # atom.get_vector() returns the coord of the atom
                 if atom.name == 'CA':
                     c_alpha = list(atom.get_vector())
                 if atom.name == 'N':
@@ -190,25 +204,33 @@ def extract_receptor_structure(rec, lig, lm_embedding_chains=None):
                 count += 1
             else:
                 invalid_res_ids.append(residue.get_id())
+        # detach residue from the chain if it is not valid
         for res_id in invalid_res_ids:
             chain.detach_child(res_id)
         if len(chain_coords) > 0:
+            # [num_residues * num_atoms, 3]
             all_chain_coords = np.concatenate(chain_coords, axis=0)
+            # distance matrix between all lig atoms and all protein atoms
             distances = spatial.distance.cdist(lig_coords, all_chain_coords)
             min_distance = distances.min()
         else:
             min_distance = np.inf
 
+        # for each chain, append minimum dist between ligand and rec chain
         min_distances.append(min_distance)
+        # number of valid residuals per chain, or chain length
         lengths.append(count)
         coords.append(chain_coords)
         c_alpha_coords.append(np.array(chain_c_alpha_coords))
         n_coords.append(np.array(chain_n_coords))
         c_coords.append(np.array(chain_c_coords))
-        if not count == 0: valid_chain_ids.append(chain.get_id())
+        if not count == 0:
+            valid_chain_ids.append(chain.get_id())
 
     min_distances = np.array(min_distances)
     if len(valid_chain_ids) == 0:
+        # if a chain has no valid residuals
+        # then select the valid chain to which the lig is docked (with minimum distance)
         valid_chain_ids.append(np.argmin(min_distances))
     valid_coords = []
     valid_c_alpha_coords = []
@@ -217,6 +239,7 @@ def extract_receptor_structure(rec, lig, lm_embedding_chains=None):
     valid_lengths = []
     invalid_chain_ids = []
     valid_lm_embeddings = []
+    # getting the coordinates of all valid chains
     for i, chain in enumerate(rec):
         if chain.get_id() in valid_chain_ids:
             valid_coords.append(coords[i])
@@ -230,18 +253,22 @@ def extract_receptor_structure(rec, lig, lm_embedding_chains=None):
             valid_lengths.append(lengths[i])
         else:
             invalid_chain_ids.append(chain.get_id())
+    # concat coordinates of all atoms in the rec (including all valid chains)
     coords = [item for sublist in valid_coords for item in sublist]  # list with n_residues arrays: [n_atoms, 3]
 
     c_alpha_coords = np.concatenate(valid_c_alpha_coords, axis=0)  # [n_residues, 3]
     n_coords = np.concatenate(valid_n_coords, axis=0)  # [n_residues, 3]
     c_coords = np.concatenate(valid_c_coords, axis=0)  # [n_residues, 3]
     lm_embeddings = np.concatenate(valid_lm_embeddings, axis=0) if lm_embedding_chains is not None else None
+    # remove all invalid chains of the receptor
     for invalid_id in invalid_chain_ids:
         rec.detach_child(invalid_id)
 
+    # recording only the residual coords
     assert len(c_alpha_coords) == len(n_coords)
     assert len(c_alpha_coords) == len(c_coords)
     assert sum(valid_lengths) == len(c_alpha_coords)
+    # return the receptor protein including only docked chain coords
     return rec, coords, c_alpha_coords, n_coords, c_coords, lm_embeddings
 
 
@@ -256,8 +283,12 @@ def get_lig_graph(mol, complex_graph):
         col += [end, start]
         edge_type += 2 * [bonds[bond.GetBondType()]] if bond.GetBondType() != BT.UNSPECIFIED else [0, 0]
 
+    # this is a tensor of two rows, the first row represents the source nodes
+    # the second row represents the sink nodes. source and sink nodes are swapped
+    # and repeated for every bond indicating its an undirected graph
     edge_index = torch.tensor([row, col], dtype=torch.long)
     edge_type = torch.tensor(edge_type, dtype=torch.long)
+    # one hot encoded edge type for all bonds
     edge_attr = F.one_hot(edge_type, num_classes=len(bonds)).to(torch.float)
 
     complex_graph['ligand'].x = atom_feats
@@ -265,6 +296,7 @@ def get_lig_graph(mol, complex_graph):
     complex_graph['ligand', 'lig_bond', 'ligand'].edge_index = edge_index
     complex_graph['ligand', 'lig_bond', 'ligand'].edge_attr = edge_attr
     return
+
 
 def generate_conformer(mol):
     ps = AllChem.ETKDGv2()
@@ -277,6 +309,7 @@ def generate_conformer(mol):
     # else:
     #    AllChem.MMFFOptimizeMolecule(mol_rdkit, confId=0)
 
+
 def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching, keep_original, num_conformers, remove_hs):
     if matching:
         mol_maybe_noh = copy.deepcopy(mol_)
@@ -285,22 +318,31 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
         if keep_original:
             complex_graph['ligand'].orig_pos = mol_maybe_noh.GetConformer().GetPositions()
 
+        # list of tuples, each tuple contains 4 atom indices that
+        # can be used to determine the torsion DihedralRad of a rotable bond
         rotable_bonds = get_torsion_angles(mol_maybe_noh)
-        if not rotable_bonds: print("no_rotable_bonds but still using it")
+        if not rotable_bonds:
+            print("no_rotable_bonds but still using it")
 
         for i in range(num_conformers):
             mol_rdkit = copy.deepcopy(mol_)
 
             mol_rdkit.RemoveAllConformers()
             mol_rdkit = AllChem.AddHs(mol_rdkit)
+            # use RDkit ETKDG to generate a seed conformer C
             generate_conformer(mol_rdkit)
             if remove_hs:
                 mol_rdkit = RemoveHs(mol_rdkit, sanitize=True)
             mol = copy.deepcopy(mol_maybe_noh)
             if rotable_bonds:
+                # align seed conformation with ground truth conformation
+                # by optimizing Dihedral angle of all the rotable bonds
+                # of seed conformation using differential evolution
                 optimize_rotatable_bonds(mol_rdkit, mol, rotable_bonds, popsize=popsize, maxiter=maxiter)
             mol.AddConformer(mol_rdkit.GetConformer())
             rms_list = []
+            # calculate the RMSD between mol_conf[0] ground truth
+            # and mol_conf[1] aligned seed conformation
             AllChem.AlignMolConformers(mol, RMSlist=rms_list)
             mol_rdkit.RemoveAllConformers()
             mol_rdkit.AddConformer(mol.GetConformers()[1])
@@ -315,7 +357,8 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
 
     else:  # no matching
         complex_graph.rmsd_matching = 0
-        if remove_hs: mol_ = RemoveHs(mol_)
+        if remove_hs:
+            mol_ = RemoveHs(mol_)
         get_lig_graph(mol_, complex_graph)
 
     edge_mask, mask_rotate = get_transformation_mask(complex_graph)
@@ -340,6 +383,7 @@ def get_calpha_graph(rec, c_alpha_coords, n_coords, c_coords, complex_graph, cut
     for i in range(num_residues):
         dst = list(np.where(distances[i, :] < cutoff)[0])
         dst.remove(i)
+        # limit the number of neighbors
         if max_neighbor != None and len(dst) > max_neighbor:
             dst = list(np.argsort(distances[i, :]))[1: max_neighbor + 1]
         if len(dst) == 0:
@@ -353,24 +397,34 @@ def get_calpha_graph(rec, c_alpha_coords, n_coords, c_coords, complex_graph, cut
         valid_dist = list(distances[i, dst])
         valid_dist_np = distances[i, dst]
         sigma = np.array([1., 2., 5., 10., 30.]).reshape((-1, 1))
+        # calculate softmax weight per residue based on different cutoff distance
         weights = softmax(- valid_dist_np.reshape((1, -1)) ** 2 / sigma, axis=1)  # (sigma_num, neigh_num)
         assert weights[0].sum() > 1 - 1e-2 and weights[0].sum() < 1.01
         diff_vecs = c_alpha_coords[src, :] - c_alpha_coords[dst, :]  # (neigh_num, 3)
+        # sum_i w_i * diff_vecs_i
         mean_vec = weights.dot(diff_vecs)  # (sigma_num, 3)
+        # sum_i w_i * ||diff_vecs_i|| mean distance
         denominator = weights.dot(np.linalg.norm(diff_vecs, axis=1))  # (sigma_num,)
+        # ||sum_i w_i * diff_vecs_i||/(sum_i w_i * ||diff_vecs_i||)
         mean_vec_ratio_norm = np.linalg.norm(mean_vec, axis=1) / denominator  # (sigma_num,)
         mean_norm_list.append(mean_vec_ratio_norm)
     assert len(src_list) == len(dst_list)
 
+    # list of amino acide types
     node_feat = rec_residue_featurizer(rec)
     mu_r_norm = torch.from_numpy(np.array(mean_norm_list).astype(np.float32))
     side_chain_vecs = torch.from_numpy(
         np.concatenate([np.expand_dims(n_rel_pos, axis=1), np.expand_dims(c_rel_pos, axis=1)], axis=1))
 
+    # concat amino acide type feature with its esm embedding
     complex_graph['receptor'].x = torch.cat([node_feat, torch.tensor(lm_embeddings)], axis=1) if lm_embeddings is not None else node_feat
+    # alpha carbon location representing the residue
     complex_graph['receptor'].pos = torch.from_numpy(c_alpha_coords).float()
+    # normalized mean vector per residue
     complex_graph['receptor'].mu_r_norm = mu_r_norm
+    # coordinate of the side chain atom N and C per residue
     complex_graph['receptor'].side_chain_vecs = side_chain_vecs.float()
+    # connected residues per residue based on cutoff distance
     complex_graph['receptor', 'rec_contact', 'receptor'].edge_index = torch.from_numpy(np.asarray([src_list, dst_list]))
 
     return
@@ -401,9 +455,9 @@ def get_rec_graph(rec, rec_coords, c_alpha_coords, n_coords, c_coords, complex_g
     if all_atoms:
         return get_fullrec_graph(rec, rec_coords, c_alpha_coords, n_coords, c_coords, complex_graph,
                                  c_alpha_cutoff=rec_radius, c_alpha_max_neighbors=c_alpha_max_neighbors,
-                                 atom_cutoff=atom_radius, atom_max_neighbors=atom_max_neighbors, remove_hs=remove_hs,lm_embeddings=lm_embeddings)
+                                 atom_cutoff=atom_radius, atom_max_neighbors=atom_max_neighbors, remove_hs=remove_hs, lm_embeddings=lm_embeddings)
     else:
-        return get_calpha_graph(rec, c_alpha_coords, n_coords, c_coords, complex_graph, rec_radius, c_alpha_max_neighbors,lm_embeddings=lm_embeddings)
+        return get_calpha_graph(rec, c_alpha_coords, n_coords, c_coords, complex_graph, rec_radius, c_alpha_max_neighbors, lm_embeddings=lm_embeddings)
 
 
 def get_fullrec_graph(rec, rec_coords, c_alpha_coords, n_coords, c_coords, complex_graph, c_alpha_cutoff=20,
@@ -457,7 +511,7 @@ def get_fullrec_graph(rec, rec_coords, c_alpha_coords, n_coords, c_coords, compl
     complex_graph['receptor'].side_chain_vecs = side_chain_vecs.float()
     complex_graph['receptor', 'rec_contact', 'receptor'].edge_index = torch.from_numpy(np.asarray([src_list, dst_list]))
 
-    src_c_alpha_idx = np.concatenate([np.asarray([i]*len(l)) for i, l in enumerate(rec_coords)])
+    src_c_alpha_idx = np.concatenate([np.asarray([i] * len(l)) for i, l in enumerate(rec_coords)])
     atom_feat = torch.from_numpy(np.asarray(rec_atom_featurizer(rec)))
     atom_coords = torch.from_numpy(np.concatenate(rec_coords, axis=0)).float()
 
@@ -477,14 +531,16 @@ def get_fullrec_graph(rec, rec_coords, c_alpha_coords, n_coords, c_coords, compl
 
     return
 
+
 def write_mol_with_coords(mol, new_coords, path):
     w = Chem.SDWriter(path)
     conf = mol.GetConformer()
     for i in range(mol.GetNumAtoms()):
-        x,y,z = new_coords.astype(np.double)[i]
-        conf.SetAtomPosition(i,Point3D(x,y,z))
+        x, y, z = new_coords.astype(np.double)[i]
+        conf.SetAtomPosition(i, Point3D(x, y, z))
     w.write(mol)
     w.close()
+
 
 def read_molecule(molecule_file, sanitize=False, calc_charges=False, remove_hs=False):
     if molecule_file.endswith('.mol2'):

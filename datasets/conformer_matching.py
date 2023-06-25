@@ -1,4 +1,5 @@
-import copy, time
+import copy
+import time
 import numpy as np
 from collections import defaultdict
 from rdkit import Chem, RDLogger
@@ -12,6 +13,7 @@ RDLogger.DisableLog('rdApp.*')
 """
     Conformer matching routines from Torsional Diffusion
 """
+
 
 def GetDihedral(conf, atom_idx):
     return rdMolTransforms.GetDihedralRad(conf, atom_idx[0], atom_idx[1], atom_idx[2], atom_idx[3])
@@ -62,6 +64,14 @@ class OptimizeConformer:
 
 
 def get_torsion_angles(mol):
+    '''
+    input: RDKit mol
+    output: List of 4-atom-index tuple that identifies all rotatable bonds
+            each element of the tuple contains 4 atom indices that can be used
+            to calculate the torson angle
+    rotatable bonds: are defined as edges the removal of which will break the
+    graph into two subgraphs
+    '''
     torsions_list = []
     G = nx.Graph()
     for i, atom in enumerate(mol.GetAtoms()):
@@ -73,9 +83,14 @@ def get_torsion_angles(mol):
     for e in G.edges():
         G2 = copy.deepcopy(G)
         G2.remove_edge(*e)
-        if nx.is_connected(G2): continue
+        if nx.is_connected(G2):
+            continue
+        # sort and rank disconnected graph components by their length
+        # a valid graph component has to have two elements
+        # the bond between a hydrogen and benz ring is not a rotable bond
         l = list(sorted(nx.connected_components(G2), key=len)[0])
-        if len(l) < 2: continue
+        if len(l) < 2:
+            continue
         n0 = list(G2.neighbors(e[0]))
         n1 = list(G2.neighbors(e[1]))
         torsions_list.append(

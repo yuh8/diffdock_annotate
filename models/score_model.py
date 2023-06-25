@@ -15,13 +15,14 @@ from datasets.process_mols import lig_feature_dims, rec_residue_feature_dims
 
 class AtomEncoder(torch.nn.Module):
 
-    def __init__(self, emb_dim, feature_dims, sigma_embed_dim, lm_embedding_type= None):
+    def __init__(self, emb_dim, feature_dims, sigma_embed_dim, lm_embedding_type=None):
         # first element of feature_dims tuple is a list with the lenght of each categorical feature and the second is the number of scalar features
         super(AtomEncoder, self).__init__()
         self.atom_embedding_list = torch.nn.ModuleList()
         self.num_categorical_features = len(feature_dims[0])
         self.num_scalar_features = feature_dims[1] + sigma_embed_dim
         self.lm_embedding_type = lm_embedding_type
+        # embedding lookup table for atomic features 119 to 48
         for i, dim in enumerate(feature_dims[0]):
             emb = torch.nn.Embedding(dim, emb_dim)
             torch.nn.init.xavier_uniform_(emb.weight.data)
@@ -32,20 +33,25 @@ class AtomEncoder(torch.nn.Module):
         if self.lm_embedding_type is not None:
             if self.lm_embedding_type == 'esm':
                 self.lm_embedding_dim = 1280
-            else: raise ValueError('LM Embedding type was not correctly determined. LM embedding type: ', self.lm_embedding_type)
+            else:
+                raise ValueError('LM Embedding type was not correctly determined. LM embedding type: ', self.lm_embedding_type)
             self.lm_embedding_layer = torch.nn.Linear(self.lm_embedding_dim + emb_dim, emb_dim)
 
     def forward(self, x):
+        breakpoint()
         x_embedding = 0
         if self.lm_embedding_type is not None:
             assert x.shape[1] == self.num_categorical_features + self.num_scalar_features + self.lm_embedding_dim
         else:
             assert x.shape[1] == self.num_categorical_features + self.num_scalar_features
+        # sum all catagorical values
         for i in range(self.num_categorical_features):
             x_embedding += self.atom_embedding_list[i](x[:, i].long())
 
+        # sum again the time embedding values
         if self.num_scalar_features > 0:
             x_embedding += self.linear(x[:, self.num_categorical_features:self.num_categorical_features + self.num_scalar_features])
+        # concat with esm embedding values for rec node
         if self.lm_embedding_type is not None:
             x_embedding = self.lm_embedding_layer(torch.cat([x_embedding, x[:, -self.lm_embedding_dim:]], axis=1))
         return x_embedding
@@ -73,11 +79,13 @@ class TensorProductConvLayer(torch.nn.Module):
         self.batch_norm = BatchNorm(out_irreps) if batch_norm else None
 
     def forward(self, node_attr, edge_index, edge_attr, edge_sh, out_nodes=None, reduce='mean'):
-
+        breakpoint()
         edge_src, edge_dst = edge_index
+        # tensor product [h_b x Y(r_ab) weighted by f(e_ab,h_a,h_b)]
         tp = self.tp(node_attr[edge_dst], edge_sh, self.fc(edge_attr))
 
         out_nodes = out_nodes or node_attr.shape[0]
+        # scatter and to all source node and sum all neighbor info
         out = scatter(tp, edge_src, dim=0, dim_size=out_nodes, reduce=reduce)
 
         if self.residual:
@@ -117,12 +125,12 @@ class TensorProductScoreModel(torch.nn.Module):
         self.num_conv_layers = num_conv_layers
 
         self.lig_node_embedding = AtomEncoder(emb_dim=ns, feature_dims=lig_feature_dims, sigma_embed_dim=sigma_embed_dim)
-        self.lig_edge_embedding = nn.Sequential(nn.Linear(in_lig_edge_features + sigma_embed_dim + distance_embed_dim, ns),nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
+        self.lig_edge_embedding = nn.Sequential(nn.Linear(in_lig_edge_features + sigma_embed_dim + distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout), nn.Linear(ns, ns))
 
         self.rec_node_embedding = AtomEncoder(emb_dim=ns, feature_dims=rec_residue_feature_dims, sigma_embed_dim=sigma_embed_dim, lm_embedding_type=lm_embedding_type)
-        self.rec_edge_embedding = nn.Sequential(nn.Linear(sigma_embed_dim + distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
+        self.rec_edge_embedding = nn.Sequential(nn.Linear(sigma_embed_dim + distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout), nn.Linear(ns, ns))
 
-        self.cross_edge_embedding = nn.Sequential(nn.Linear(sigma_embed_dim + cross_distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
+        self.cross_edge_embedding = nn.Sequential(nn.Linear(sigma_embed_dim + cross_distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout), nn.Linear(ns, ns))
 
         self.lig_distance_expansion = GaussianSmearing(0.0, lig_max_radius, distance_embed_dim)
         self.rec_distance_expansion = GaussianSmearing(0.0, rec_max_radius, distance_embed_dim)
@@ -174,7 +182,7 @@ class TensorProductScoreModel(torch.nn.Module):
 
         if self.confidence_mode:
             self.confidence_predictor = nn.Sequential(
-                nn.Linear(2*self.ns if num_conv_layers >= 3 else self.ns,ns),
+                nn.Linear(2 * self.ns if num_conv_layers >= 3 else self.ns, ns),
                 nn.BatchNorm1d(ns) if not confidence_no_batchnorm else nn.Identity(),
                 nn.ReLU(),
                 nn.Dropout(confidence_dropout),
@@ -203,8 +211,8 @@ class TensorProductScoreModel(torch.nn.Module):
                 dropout=dropout,
                 batch_norm=batch_norm
             )
-            self.tr_final_layer = nn.Sequential(nn.Linear(1 + sigma_embed_dim, ns),nn.Dropout(dropout), nn.ReLU(), nn.Linear(ns, 1))
-            self.rot_final_layer = nn.Sequential(nn.Linear(1 + sigma_embed_dim, ns),nn.Dropout(dropout), nn.ReLU(), nn.Linear(ns, 1))
+            self.tr_final_layer = nn.Sequential(nn.Linear(1 + sigma_embed_dim, ns), nn.Dropout(dropout), nn.ReLU(), nn.Linear(ns, 1))
+            self.rot_final_layer = nn.Sequential(nn.Linear(1 + sigma_embed_dim, ns), nn.Dropout(dropout), nn.ReLU(), nn.Linear(ns, 1))
 
             if not no_torsion:
                 # torsion angles components
@@ -239,6 +247,7 @@ class TensorProductScoreModel(torch.nn.Module):
 
         # build ligand graph
         lig_node_attr, lig_edge_index, lig_edge_attr, lig_edge_sh = self.build_lig_conv_graph(data)
+        breakpoint()
         lig_src, lig_dst = lig_edge_index
         lig_node_attr = self.lig_node_embedding(lig_node_attr)
         lig_edge_attr = self.lig_edge_embedding(lig_edge_attr)
@@ -250,16 +259,19 @@ class TensorProductScoreModel(torch.nn.Module):
         rec_edge_attr = self.rec_edge_embedding(rec_edge_attr)
 
         # build cross graph
+        # cut off distance per batch
         if self.dynamic_max_cross:
             cross_cutoff = (tr_sigma * 3 + 20).unsqueeze(1)
         else:
             cross_cutoff = self.cross_max_distance
+        # cross edge attr = [edge time ebedding, edge distance embedding]
         cross_edge_index, cross_edge_attr, cross_edge_sh = self.build_cross_conv_graph(data, cross_cutoff)
         cross_lig, cross_rec = cross_edge_index
         cross_edge_attr = self.cross_edge_embedding(cross_edge_attr)
 
         for l in range(len(self.lig_conv_layers)):
             # intra graph message passing
+            # [e_ab,h_a,h_b]
             lig_edge_attr_ = torch.cat([lig_edge_attr, lig_node_attr[lig_src, :self.ns], lig_node_attr[lig_dst, :self.ns]], -1)
             lig_intra_update = self.lig_conv_layers[l](lig_node_attr, lig_edge_index, lig_edge_attr_, lig_edge_sh)
 
@@ -288,7 +300,7 @@ class TensorProductScoreModel(torch.nn.Module):
 
         # compute confidence score
         if self.confidence_mode:
-            scalar_lig_attr = torch.cat([lig_node_attr[:,:self.ns],lig_node_attr[:,-self.ns:] ], dim=1) if self.num_conv_layers >= 3 else lig_node_attr[:,:self.ns]
+            scalar_lig_attr = torch.cat([lig_node_attr[:, :self.ns], lig_node_attr[:, -self.ns:]], dim=1) if self.num_conv_layers >= 3 else lig_node_attr[:, :self.ns]
             confidence = self.confidence_predictor(scatter_mean(scalar_lig_attr, data['ligand'].batch, dim=0)).squeeze(dim=-1)
             return confidence
 
@@ -312,7 +324,8 @@ class TensorProductScoreModel(torch.nn.Module):
             tr_pred = tr_pred / tr_sigma.unsqueeze(1)
             rot_pred = rot_pred * so3.score_norm(rot_sigma.cpu()).unsqueeze(1).to(data['ligand'].x.device)
 
-        if self.no_torsion or data['ligand'].edge_mask.sum() == 0: return tr_pred, rot_pred, torch.empty(0, device=self.device)
+        if self.no_torsion or data['ligand'].edge_mask.sum() == 0:
+            return tr_pred, rot_pred, torch.empty(0, device=self.device)
 
         # torsional components
         tor_bonds, tor_edge_index, tor_edge_attr, tor_edge_sh = self.build_bond_conv_graph(data)
@@ -325,7 +338,7 @@ class TensorProductScoreModel(torch.nn.Module):
         tor_edge_attr = torch.cat([tor_edge_attr, lig_node_attr[tor_edge_index[1], :self.ns],
                                    tor_bond_attr[tor_edge_index[0], :self.ns]], -1)
         tor_pred = self.tor_bond_conv(lig_node_attr, tor_edge_index, tor_edge_attr, tor_edge_sh,
-                                  out_nodes=data['ligand'].edge_mask.sum(), reduce='mean')
+                                      out_nodes=data['ligand'].edge_mask.sum(), reduce='mean')
         tor_pred = self.tor_final_layer(tor_pred).squeeze(1)
         edge_sigma = tor_sigma[data['ligand'].batch][data['ligand', 'ligand'].edge_index[0]][data['ligand'].edge_mask]
 
@@ -340,7 +353,11 @@ class TensorProductScoreModel(torch.nn.Module):
 
         # compute edges
         radius_edges = radius_graph(data['ligand'].pos, self.lig_max_radius, data['ligand'].batch)
+        # concat the direct edges with edges within a radius
+        # first row are the source nodes, second row are the sink nodes
         edge_index = torch.cat([data['ligand', 'ligand'].edge_index, radius_edges], 1).long()
+        # concat edge type [single, double...] of the direct edges and virtual edge between
+        # nodes in radius. virtual edges are represented by [0, 0, 0, 0]
         edge_attr = torch.cat([
             data['ligand', 'ligand'].edge_attr,
             torch.zeros(radius_edges.shape[-1], self.in_lig_edge_features, device=data['ligand'].x.device)
@@ -348,21 +365,27 @@ class TensorProductScoreModel(torch.nn.Module):
 
         # compute initial features
         edge_sigma_emb = data['ligand'].node_sigma_emb[edge_index[0].long()]
+        # edge sigma embedding is the diffusion t embedding, direct concat with one-hot edge type
         edge_attr = torch.cat([edge_attr, edge_sigma_emb], 1)
+        # node_sigma_emb is the diffusion t embedding for node, direct concat
+        # data['ligand'].x are the raw catagorical node features
         node_attr = torch.cat([data['ligand'].x, data['ligand'].node_sigma_emb], 1)
 
         src, dst = edge_index
         edge_vec = data['ligand'].pos[dst.long()] - data['ligand'].pos[src.long()]
+        # each edge distance mapped to prob densities of edge_dims of equally separated gaussian distribution
         edge_length_emb = self.lig_distance_expansion(edge_vec.norm(dim=-1))
 
+        # [raw_edge_type, edge_time_embed, edge_length_embed]
         edge_attr = torch.cat([edge_attr, edge_length_emb], 1)
+        # calculate and concat up tp l order sh [y^0(r), y^1(r), y^2(r)]
         edge_sh = o3.spherical_harmonics(self.sh_irreps, edge_vec, normalize=True, normalization='component')
 
         return node_attr, edge_index, edge_attr, edge_sh
 
     def build_rec_conv_graph(self, data):
         # builds the receptor initial node and edge embeddings
-        data['receptor'].node_sigma_emb = self.timestep_emb_func(data['receptor'].node_t['tr']) # tr rot and tor noise is all the same
+        data['receptor'].node_sigma_emb = self.timestep_emb_func(data['receptor'].node_t['tr'])  # tr rot and tor noise is all the same
         node_attr = torch.cat([data['receptor'].x, data['receptor'].node_sigma_emb], 1)
 
         # this assumes the edges were already created in preprocessing since protein's structure is fixed
@@ -378,15 +401,16 @@ class TensorProductScoreModel(torch.nn.Module):
         return node_attr, edge_index, edge_attr, edge_sh
 
     def build_cross_conv_graph(self, data, cross_distance_cutoff):
+        breakpoint()
         # builds the cross edges between ligand and receptor
         if torch.is_tensor(cross_distance_cutoff):
-            # different cutoff for every graph (depends on the diffusion time)
+            # different cutoff for every graph (depends on the diffusion time and batch)
             edge_index = radius(data['receptor'].pos / cross_distance_cutoff[data['receptor'].batch],
                                 data['ligand'].pos / cross_distance_cutoff[data['ligand'].batch], 1,
                                 data['receptor'].batch, data['ligand'].batch, max_num_neighbors=10000)
         else:
             edge_index = radius(data['receptor'].pos, data['ligand'].pos, cross_distance_cutoff,
-                            data['receptor'].batch, data['ligand'].batch, max_num_neighbors=10000)
+                                data['receptor'].batch, data['ligand'].batch, max_num_neighbors=10000)
 
         src, dst = edge_index
         edge_vec = data['receptor'].pos[dst.long()] - data['ligand'].pos[src.long()]
