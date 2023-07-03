@@ -110,6 +110,7 @@ class PDBBind(Dataset):
                 self.rdkit_ligands = pickle.load(f)
 
         print_statistics(self.complex_graphs)
+        breakpoint()
 
     def len(self):
         return len(self.complex_graphs)
@@ -320,6 +321,8 @@ class PDBBind(Dataset):
             ligs = read_mols(self.pdbbind_dir, name, remove_hs=False)
         complex_graphs = []
         failed_indices = []
+        # there could be multiple lig bound to the same target
+        # each will have its own bound-complex and lig graph
         for i, lig in enumerate(ligs):
             if self.max_lig_size is not None and lig.GetNumHeavyAtoms() > self.max_lig_size:
                 print(f'Ligand with {lig.GetNumHeavyAtoms()} heavy atoms is larger than max_lig_size {self.max_lig_size}. Not including {name} in preprocessed data.')
@@ -347,7 +350,7 @@ class PDBBind(Dataset):
                 failed_indices.append(i)
                 continue
 
-            # centre both lig and protein coords
+            # centre both lig and protein coords at protein coords centre
             protein_center = torch.mean(complex_graph['receptor'].pos, dim=0, keepdim=True)
             complex_graph['receptor'].pos -= protein_center
             if self.all_atoms:
@@ -367,7 +370,7 @@ class PDBBind(Dataset):
 
 
 def print_statistics(complex_graphs):
-    statistics = ([], [], [], [])
+    statistics = ([], [], [], [], [])
 
     for complex_graph in complex_graphs:
         lig_pos = complex_graph['ligand'].pos if torch.is_tensor(complex_graph['ligand'].pos) else complex_graph['ligand'].pos[0]
@@ -383,10 +386,12 @@ def print_statistics(complex_graphs):
             statistics[3].append(complex_graph.rmsd_matching)
         else:
             statistics[3].append(0)
+        num_of_residuals = complex_graph['receptor'].x.shape[0]
+        statistics[4].append(num_of_residuals)
 
-    name = ['radius protein', 'radius molecule', 'distance protein-mol', 'rmsd matching']
+    name = ['radius protein', 'radius molecule', 'distance protein-mol', 'rmsd matching', 'rec size']
     print('Number of complexes: ', len(complex_graphs))
-    for i in range(4):
+    for i in range(5):
         array = np.asarray(statistics[i])
         print(f"{name[i]}: mean {np.mean(array)}, std {np.std(array)}, max {np.max(array)}")
 

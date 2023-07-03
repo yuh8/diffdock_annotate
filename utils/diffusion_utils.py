@@ -10,9 +10,9 @@ from utils.torsion import modify_conformer_torsion_angles
 
 
 def t_to_sigma(t_tr, t_rot, t_tor, args):
-    tr_sigma = args.tr_sigma_min ** (1-t_tr) * args.tr_sigma_max ** t_tr
-    rot_sigma = args.rot_sigma_min ** (1-t_rot) * args.rot_sigma_max ** t_rot
-    tor_sigma = args.tor_sigma_min ** (1-t_tor) * args.tor_sigma_max ** t_tor
+    tr_sigma = args.tr_sigma_min ** (1 - t_tr) * args.tr_sigma_max ** t_tr
+    rot_sigma = args.rot_sigma_min ** (1 - t_rot) * args.rot_sigma_max ** t_rot
+    tor_sigma = args.tor_sigma_min ** (1 - t_tor) * args.tor_sigma_max ** t_tor
     return tr_sigma, rot_sigma, tor_sigma
 
 
@@ -26,6 +26,8 @@ def modify_conformer(data, tr_update, rot_update, torsion_updates):
                                                            data['ligand', 'ligand'].edge_index.T[data['ligand'].edge_mask],
                                                            data['ligand'].mask_rotate if isinstance(data['ligand'].mask_rotate, np.ndarray) else data['ligand'].mask_rotate[0],
                                                            torsion_updates).to(rigid_new_pos.device)
+        # align updated ligand with the original one by using Kabsch alignment'
+        # this minimizes the effect of torsion update on rotation and translation
         R, t = rigid_transform_Kabsch_3D_torch(flexible_new_pos.T, rigid_new_pos.T)
         aligned_flexible_pos = flexible_new_pos @ R.T + t.T
         data['ligand'].pos = aligned_flexible_pos
@@ -55,7 +57,7 @@ class GaussianFourierProjection(nn.Module):
 
     def __init__(self, embedding_size=256, scale=1.0):
         super().__init__()
-        self.W = nn.Parameter(torch.randn(embedding_size//2) * scale, requires_grad=False)
+        self.W = nn.Parameter(torch.randn(embedding_size // 2) * scale, requires_grad=False)
 
     def forward(self, x):
         x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
@@ -65,7 +67,7 @@ class GaussianFourierProjection(nn.Module):
 
 def get_timestep_embedding(embedding_type, embedding_dim, embedding_scale=10000):
     if embedding_type == 'sinusoidal':
-        emb_func = (lambda x : sinusoidal_embedding(embedding_scale * x, embedding_dim))
+        emb_func = (lambda x: sinusoidal_embedding(embedding_scale * x, embedding_dim))
     elif embedding_type == 'fourier':
         emb_func = GaussianFourierProjection(embedding_size=embedding_dim, scale=embedding_scale)
     else:
@@ -87,8 +89,8 @@ def set_time(complex_graphs, t_tr, t_rot, t_tor, batchsize, all_atoms, device):
         'rot': t_rot * torch.ones(complex_graphs['receptor'].num_nodes).to(device),
         'tor': t_tor * torch.ones(complex_graphs['receptor'].num_nodes).to(device)}
     complex_graphs.complex_t = {'tr': t_tr * torch.ones(batchsize).to(device),
-                               'rot': t_rot * torch.ones(batchsize).to(device),
-                               'tor': t_tor * torch.ones(batchsize).to(device)}
+                                'rot': t_rot * torch.ones(batchsize).to(device),
+                                'tor': t_tor * torch.ones(batchsize).to(device)}
     if all_atoms:
         complex_graphs['atom'].node_t = {
             'tr': t_tr * torch.ones(complex_graphs['atom'].num_nodes).to(device),

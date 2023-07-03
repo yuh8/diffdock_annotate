@@ -52,6 +52,9 @@ def get_transformation_mask(pyg_data):
 
 
 def modify_conformer_torsion_angles(pos, edge_index, mask_rotate, torsion_updates, as_numpy=False):
+    '''
+    edge_index is the filtered index containing only edges to be rotated
+    '''
     pos = copy.deepcopy(pos)
     if type(pos) != np.ndarray:
         pos = pos.cpu().numpy()
@@ -62,10 +65,13 @@ def modify_conformer_torsion_angles(pos, edge_index, mask_rotate, torsion_update
         u, v = e[0], e[1]
 
         # check if need to reverse the edge, v should be connected to the part that gets rotated
+        # v is the atom idx belonging to the smaller subgraph to be rotated
         assert not mask_rotate[idx_edge, u]
         assert mask_rotate[idx_edge, v]
 
-        rot_vec = pos[u] - pos[v]  # convention: positive rotation if pointing inwards
+        rot_vec = pos[u] - pos[v]  # convention: positive rotation if pointing inwards (towwards part to be rotated)
+        # Rotation function accepts normalized z axis times the angle (rad) of rotation
+        # and generate a rotation matrix centred at the origin of z axis (node v)
         rot_vec = rot_vec * torsion_updates[idx_edge] / np.linalg.norm(rot_vec)  # idx_edge!
         rot_mat = R.from_rotvec(rot_vec).as_matrix()
 

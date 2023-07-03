@@ -385,6 +385,7 @@ def get_calpha_graph(rec, c_alpha_coords, n_coords, c_coords, complex_graph, cut
         dst.remove(i)
         # limit the number of neighbors
         if max_neighbor != None and len(dst) > max_neighbor:
+            # starting from 1 as the i^th atom itself has zero distance
             dst = list(np.argsort(distances[i, :]))[1: max_neighbor + 1]
         if len(dst) == 0:
             dst = list(np.argsort(distances[i, :]))[1:2]  # choose second because first is i itself
@@ -397,21 +398,23 @@ def get_calpha_graph(rec, c_alpha_coords, n_coords, c_coords, complex_graph, cut
         valid_dist = list(distances[i, dst])
         valid_dist_np = distances[i, dst]
         sigma = np.array([1., 2., 5., 10., 30.]).reshape((-1, 1))
-        # calculate softmax weight per residue based on different cutoff distance
-        weights = softmax(- valid_dist_np.reshape((1, -1)) ** 2 / sigma, axis=1)  # (sigma_num, neigh_num)
+        # calculate softmax weight per residuel based on different cutoff distance
+        # [1, len(valid_dist)] * [5, 1] = [5, len(valid_dist)]
+        weights = softmax(- valid_dist_np.reshape((1, -1)) ** 2 / sigma, axis=1)  # (sigma_num, weight_num)
         assert weights[0].sum() > 1 - 1e-2 and weights[0].sum() < 1.01
         diff_vecs = c_alpha_coords[src, :] - c_alpha_coords[dst, :]  # (neigh_num, 3)
-        # sum_i w_i * diff_vecs_i
+        # sum_i w_i * diff_vecs_i [5, len(valid_dist)] * [len(valid_dist), 3]
         mean_vec = weights.dot(diff_vecs)  # (sigma_num, 3)
-        # sum_i w_i * ||diff_vecs_i|| mean distance
+        # sum_i w_i * ||diff_vecs_i|| mean distance [5, len(valid_dist)] * [len(valid_dist),]
         denominator = weights.dot(np.linalg.norm(diff_vecs, axis=1))  # (sigma_num,)
         # ||sum_i w_i * diff_vecs_i||/(sum_i w_i * ||diff_vecs_i||)
         mean_vec_ratio_norm = np.linalg.norm(mean_vec, axis=1) / denominator  # (sigma_num,)
         mean_norm_list.append(mean_vec_ratio_norm)
     assert len(src_list) == len(dst_list)
 
-    # list of amino acide types
+    # list of amino acide type indices
     node_feat = rec_residue_featurizer(rec)
+    # mean vector length normalized based on different cutoff distance
     mu_r_norm = torch.from_numpy(np.array(mean_norm_list).astype(np.float32))
     side_chain_vecs = torch.from_numpy(
         np.concatenate([np.expand_dims(n_rel_pos, axis=1), np.expand_dims(c_rel_pos, axis=1)], axis=1))
