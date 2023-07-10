@@ -115,8 +115,10 @@ def main_function():
     # construct loader
     # t_sigma_compl computes the variance schedule according to sigma_min^(1-t) * sigma_max^(t)
     t_to_sigma = partial(t_to_sigma_compl, args=args)
+    # loader outputs a collated batch, each batch is a heterograph object
+    # atom pos and indices are incremented in sequence [0, 1, 2, 0, 1, 2] ==> [0, 1, 2, 3, 4, 5]
+    # edge indices are updated based on the incremented atom indices
     train_loader, val_loader = construct_loader(args, t_to_sigma)
-    breakpoint()
 
     model = get_model(args, device, t_to_sigma=t_to_sigma)
     optimizer, scheduler = get_optimizer_and_scheduler(args, model, scheduler_mode=args.inference_earlystop_goal if args.val_inference_freq is not None else 'min')

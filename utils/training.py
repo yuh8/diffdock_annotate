@@ -89,7 +89,7 @@ class AverageMeter():
             for i in range(self.intervals):
                 for type_idx, k in enumerate(self.types):
                     out['int' + str(i) + '_' + k] = (
-                            list(self.acc.values())[type_idx][i] / self.count[type_idx][i]).item()
+                        list(self.acc.values())[type_idx][i] / self.count[type_idx][i]).item()
             return out
 
 
@@ -179,7 +179,8 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
                 raise e
 
     out = meter.summary()
-    if test_sigma_intervals > 0: out.update(meter_all.summary())
+    if test_sigma_intervals > 0:
+        out.update(meter_all.summary())
     return out
 
 
@@ -199,7 +200,7 @@ def inference_epoch(model, complex_graphs, device, t_to_sigma, args):
         failed_convergence_counter = 0
         while predictions_list == None:
             try:
-                predictions_list, confidences = sampling(data_list=data_list, model=model.module if device.type=='cuda' else model,
+                predictions_list, confidences = sampling(data_list=data_list, model=model.module if device.type == 'cuda' else model,
                                                          inference_steps=args.inference_steps,
                                                          tr_schedule=tr_schedule, rot_schedule=rot_schedule,
                                                          tor_schedule=tor_schedule,
@@ -213,7 +214,8 @@ def inference_epoch(model, complex_graphs, device, t_to_sigma, args):
                     print('| WARNING: SVD failed to converge - trying again with a new sample')
                 else:
                     raise e
-        if failed_convergence_counter > 5: continue
+        if failed_convergence_counter > 5:
+            continue
         if args.no_torsion:
             orig_complex_graph['ligand'].orig_pos = (orig_complex_graph['ligand'].pos.cpu().numpy() +
                                                      orig_complex_graph.original_center.cpu().numpy())

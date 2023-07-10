@@ -38,7 +38,6 @@ class AtomEncoder(torch.nn.Module):
             self.lm_embedding_layer = torch.nn.Linear(self.lm_embedding_dim + emb_dim, emb_dim)
 
     def forward(self, x):
-        breakpoint()
         x_embedding = 0
         if self.lm_embedding_type is not None:
             assert x.shape[1] == self.num_categorical_features + self.num_scalar_features + self.lm_embedding_dim
@@ -48,7 +47,7 @@ class AtomEncoder(torch.nn.Module):
         for i in range(self.num_categorical_features):
             x_embedding += self.atom_embedding_list[i](x[:, i].long())
 
-        # sum again the time embedding values
+        # sum again on top of the atom catagorical feature values the time embedding values
         if self.num_scalar_features > 0:
             x_embedding += self.linear(x[:, self.num_categorical_features:self.num_categorical_features + self.num_scalar_features])
         # concat with esm embedding values for rec node
@@ -79,13 +78,13 @@ class TensorProductConvLayer(torch.nn.Module):
         self.batch_norm = BatchNorm(out_irreps) if batch_norm else None
 
     def forward(self, node_attr, edge_index, edge_attr, edge_sh, out_nodes=None, reduce='mean'):
-        breakpoint()
         edge_src, edge_dst = edge_index
         # tensor product [h_b x Y(r_ab) weighted by f(e_ab,h_a,h_b)]
         tp = self.tp(node_attr[edge_dst], edge_sh, self.fc(edge_attr))
 
         out_nodes = out_nodes or node_attr.shape[0]
-        # scatter and to all source node and sum all neighbor info
+        # scatter to all source node and sum all neighbor info
+        # and output source node feature
         out = scatter(tp, edge_src, dim=0, dim_size=out_nodes, reduce=reduce)
 
         if self.residual:
@@ -247,7 +246,6 @@ class TensorProductScoreModel(torch.nn.Module):
 
         # build ligand graph
         lig_node_attr, lig_edge_index, lig_edge_attr, lig_edge_sh = self.build_lig_conv_graph(data)
-        breakpoint()
         lig_src, lig_dst = lig_edge_index
         lig_node_attr = self.lig_node_embedding(lig_node_attr)
         lig_edge_attr = self.lig_edge_embedding(lig_edge_attr)
@@ -271,15 +269,19 @@ class TensorProductScoreModel(torch.nn.Module):
 
         for l in range(len(self.lig_conv_layers)):
             # intra graph message passing
-            # [e_ab,h_a,h_b]
+            # [e_ab,h_a0,h_b0] using scalar Y^0 features only
+            # as they are invariant under SE(3)
             lig_edge_attr_ = torch.cat([lig_edge_attr, lig_node_attr[lig_src, :self.ns], lig_node_attr[lig_dst, :self.ns]], -1)
+            # ha^hat for lig atoms
             lig_intra_update = self.lig_conv_layers[l](lig_node_attr, lig_edge_index, lig_edge_attr_, lig_edge_sh)
 
-            # inter graph message passing
+            # inter graph message passing between lig atoms and residuals
             rec_to_lig_edge_attr_ = torch.cat([cross_edge_attr, lig_node_attr[cross_lig, :self.ns], rec_node_attr[cross_rec, :self.ns]], -1)
+            # ha^hat for rec residuals
             lig_inter_update = self.rec_to_lig_conv_layers[l](rec_node_attr, cross_edge_index, rec_to_lig_edge_attr_, cross_edge_sh,
                                                               out_nodes=lig_node_attr.shape[0])
 
+            # if this is not the last layer, we also update residual ha
             if l != len(self.lig_conv_layers) - 1:
                 rec_edge_attr_ = torch.cat([rec_edge_attr, rec_node_attr[rec_src, :self.ns], rec_node_attr[rec_dst, :self.ns]], -1)
                 rec_intra_update = self.rec_conv_layers[l](rec_node_attr, rec_edge_index, rec_edge_attr_, rec_edge_sh)
@@ -294,6 +296,7 @@ class TensorProductScoreModel(torch.nn.Module):
             # update features with residual updates
             lig_node_attr = lig_node_attr + lig_intra_update + lig_inter_update
 
+            # if this is not the output layer, we also update rec node attributes
             if l != len(self.lig_conv_layers) - 1:
                 rec_node_attr = F.pad(rec_node_attr, (0, rec_intra_update.shape[-1] - rec_node_attr.shape[-1]))
                 rec_node_attr = rec_node_attr + rec_intra_update + rec_inter_update
@@ -301,6 +304,8 @@ class TensorProductScoreModel(torch.nn.Module):
         # compute confidence score
         if self.confidence_mode:
             scalar_lig_attr = torch.cat([lig_node_attr[:, :self.ns], lig_node_attr[:, -self.ns:]], dim=1) if self.num_conv_layers >= 3 else lig_node_attr[:, :self.ns]
+            # mean pooling of all atom features to [BATCH, NS] vector
+            # and then to [BATCH, ]
             confidence = self.confidence_predictor(scatter_mean(scalar_lig_attr, data['ligand'].batch, dim=0)).squeeze(dim=-1)
             return confidence
 
@@ -329,10 +334,15 @@ class TensorProductScoreModel(torch.nn.Module):
 
         # torsional components
         tor_bonds, tor_edge_index, tor_edge_attr, tor_edge_sh = self.build_bond_conv_graph(data)
+        # vec point towards part to be rotated
         tor_bond_vec = data['ligand'].pos[tor_bonds[1]] - data['ligand'].pos[tor_bonds[0]]
+        # bond attribute is the sum of connected atom attribute
         tor_bond_attr = lig_node_attr[tor_bonds[0]] + lig_node_attr[tor_bonds[1]]
 
+        # Y^2(r^hat_g), parity of Y^2 is always even regardless of input
         tor_bonds_sh = o3.spherical_harmonics("2e", tor_bond_vec, normalize=True, normalization='component')
+        # [Y^2(r^hat_g) X [Y^0(r),Y^1(r),Y^2(r)]] elementwise
+        # FullTensorProduct(1x0e+1x1o+1x2e x 1x2e -> 1x0e+1x1o+1x1e+1x2o+2x2e+1x3o+1x3e+1x4e)
         tor_edge_sh = self.final_tp_tor(tor_edge_sh, tor_bonds_sh[tor_edge_index[0]])
 
         tor_edge_attr = torch.cat([tor_edge_attr, lig_node_attr[tor_edge_index[1], :self.ns],
@@ -363,7 +373,7 @@ class TensorProductScoreModel(torch.nn.Module):
             torch.zeros(radius_edges.shape[-1], self.in_lig_edge_features, device=data['ligand'].x.device)
         ], 0)
 
-        # compute initial features
+        # edge time embedding is the time embedding of the source node of the edge
         edge_sigma_emb = data['ligand'].node_sigma_emb[edge_index[0].long()]
         # edge sigma embedding is the diffusion t embedding, direct concat with one-hot edge type
         edge_attr = torch.cat([edge_attr, edge_sigma_emb], 1)
@@ -376,7 +386,7 @@ class TensorProductScoreModel(torch.nn.Module):
         # each edge distance mapped to prob densities of edge_dims of equally separated gaussian distribution
         edge_length_emb = self.lig_distance_expansion(edge_vec.norm(dim=-1))
 
-        # [raw_edge_type, edge_time_embed, edge_length_embed]
+        # [onehot_edge_type, edge_time_embed, edge_length_embed]
         edge_attr = torch.cat([edge_attr, edge_length_emb], 1)
         # calculate and concat up tp l order sh [y^0(r), y^1(r), y^2(r)]
         edge_sh = o3.spherical_harmonics(self.sh_irreps, edge_vec, normalize=True, normalization='component')
@@ -395,13 +405,14 @@ class TensorProductScoreModel(torch.nn.Module):
 
         edge_length_emb = self.rec_distance_expansion(edge_vec.norm(dim=-1))
         edge_sigma_emb = data['receptor'].node_sigma_emb[edge_index[0].long()]
+        # receptor residuals has no covalent edge attribute,
+        # edge feature contains only time embedding and length embedding
         edge_attr = torch.cat([edge_sigma_emb, edge_length_emb], 1)
         edge_sh = o3.spherical_harmonics(self.sh_irreps, edge_vec, normalize=True, normalization='component')
 
         return node_attr, edge_index, edge_attr, edge_sh
 
     def build_cross_conv_graph(self, data, cross_distance_cutoff):
-        breakpoint()
         # builds the cross edges between ligand and receptor
         if torch.is_tensor(cross_distance_cutoff):
             # different cutoff for every graph (depends on the diffusion time and batch)
@@ -409,6 +420,7 @@ class TensorProductScoreModel(torch.nn.Module):
                                 data['ligand'].pos / cross_distance_cutoff[data['ligand'].batch], 1,
                                 data['receptor'].batch, data['ligand'].batch, max_num_neighbors=10000)
         else:
+            # find for each lig atom, the residual idx within the cutoff distance
             edge_index = radius(data['receptor'].pos, data['ligand'].pos, cross_distance_cutoff,
                                 data['receptor'].batch, data['ligand'].batch, max_num_neighbors=10000)
 
@@ -424,14 +436,19 @@ class TensorProductScoreModel(torch.nn.Module):
 
     def build_center_conv_graph(self, data):
         # builds the filter and edges for the convolution generating translational and rotational scores
+        # first row of edge_index is the batch index,
+        # second row is the atom index across all batches
         edge_index = torch.cat([data['ligand'].batch.unsqueeze(0), torch.arange(len(data['ligand'].batch)).to(data['ligand'].x.device).unsqueeze(0)], dim=0)
 
         center_pos, count = torch.zeros((data.num_graphs, 3)).to(data['ligand'].x.device), torch.zeros((data.num_graphs, 3)).to(data['ligand'].x.device)
+        # accumulate (sum) coords per batch
         center_pos.index_add_(0, index=data['ligand'].batch, source=data['ligand'].pos)
+        # divide batch sum with batch count to get batch centre coord per lig
         center_pos = center_pos / torch.bincount(data['ligand'].batch).unsqueeze(1)
 
         edge_vec = data['ligand'].pos[edge_index[1]] - center_pos[edge_index[0]]
         edge_attr = self.center_distance_expansion(edge_vec.norm(dim=-1))
+        # edge time embedding is the time embedding at each atom
         edge_sigma_emb = data['ligand'].node_sigma_emb[edge_index[1].long()]
         edge_attr = torch.cat([edge_attr, edge_sigma_emb], 1)
         edge_sh = o3.spherical_harmonics(self.sh_irreps, edge_vec, normalize=True, normalization='component')
@@ -440,13 +457,16 @@ class TensorProductScoreModel(torch.nn.Module):
     def build_bond_conv_graph(self, data):
         # builds the graph for the convolution between the center of the rotatable bonds and the neighbouring nodes
         bonds = data['ligand', 'ligand'].edge_index[:, data['ligand'].edge_mask].long()
+        # bond centre position
         bond_pos = (data['ligand'].pos[bonds[0]] + data['ligand'].pos[bonds[1]]) / 2
         bond_batch = data['ligand'].batch[bonds[0]]
+        # get all atoms that are within max distance to the bond centre
         edge_index = radius(data['ligand'].pos, bond_pos, self.lig_max_radius, batch_x=data['ligand'].batch, batch_y=bond_batch)
 
         edge_vec = data['ligand'].pos[edge_index[1]] - bond_pos[edge_index[0]]
         edge_attr = self.lig_distance_expansion(edge_vec.norm(dim=-1))
 
+        # edge dist embedding is the only edge attribute
         edge_attr = self.final_edge_embedding(edge_attr)
         edge_sh = o3.spherical_harmonics(self.sh_irreps, edge_vec, normalize=True, normalization='component')
 
@@ -458,6 +478,7 @@ class GaussianSmearing(torch.nn.Module):
     def __init__(self, start=0.0, stop=5.0, num_gaussians=50):
         super().__init__()
         offset = torch.linspace(start, stop, num_gaussians)
+        # the standard deviation of each Gaussian is difference between mean
         self.coeff = -0.5 / (offset[1] - offset[0]).item() ** 2
         self.register_buffer('offset', offset)
 

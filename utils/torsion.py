@@ -69,7 +69,7 @@ def modify_conformer_torsion_angles(pos, edge_index, mask_rotate, torsion_update
         assert not mask_rotate[idx_edge, u]
         assert mask_rotate[idx_edge, v]
 
-        rot_vec = pos[u] - pos[v]  # convention: positive rotation if pointing inwards (towwards part to be rotated)
+        rot_vec = pos[u] - pos[v]  # convention: positive rotation if pointing outwards (away from part to be rotated)
         # Rotation function accepts normalized z axis times the angle (rad) of rotation
         # and generate a rotation matrix centred at the origin of z axis (node v)
         rot_vec = rot_vec * torsion_updates[idx_edge] / np.linalg.norm(rot_vec)  # idx_edge!

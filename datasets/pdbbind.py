@@ -35,7 +35,6 @@ class NoiseTransform(BaseTransform):
         return self.apply_noise(data, t_tr, t_rot, t_tor)
 
     def apply_noise(self, data, t_tr, t_rot, t_tor, tr_update=None, rot_update=None, torsion_updates=None):
-        breakpoint()
         if not torch.is_tensor(data['ligand'].pos):
             data['ligand'].pos = random.choice(data['ligand'].pos)
 
@@ -110,7 +109,6 @@ class PDBBind(Dataset):
                 self.rdkit_ligands = pickle.load(f)
 
         print_statistics(self.complex_graphs)
-        breakpoint()
 
     def len(self):
         return len(self.complex_graphs)
@@ -393,7 +391,7 @@ def print_statistics(complex_graphs):
     print('Number of complexes: ', len(complex_graphs))
     for i in range(5):
         array = np.asarray(statistics[i])
-        print(f"{name[i]}: mean {np.mean(array)}, std {np.std(array)}, max {np.max(array)}")
+        print(f"{name[i]}: mean {np.mean(array)}, std {np.std(array)}, max {np.max(array)}, percentile {np.percentile(array,[90, 95, 98.5, 99])}")
 
 
 def construct_loader(args, t_to_sigma):
@@ -412,7 +410,6 @@ def construct_loader(args, t_to_sigma):
     train_dataset = PDBBind(cache_path=args.cache_path, split_path=args.split_train, keep_original=True,
                             num_conformers=args.num_conformers, **common_args)
     val_dataset = PDBBind(cache_path=args.cache_path, split_path=args.split_val, keep_original=True, **common_args)
-
     loader_class = DataListLoader if torch.cuda.is_available() else DataLoader
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory)
     val_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory)
